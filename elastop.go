@@ -456,28 +456,15 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 	// Start with clean grid
 	grid.Clear()
 
-	visiblePanels := make([]struct {
-		panel *tview.TextView
-		show  bool
-	}, 0)
-
+	visiblePanels := 0
 	if showRoles {
-		visiblePanels = append(visiblePanels, struct {
-			panel *tview.TextView
-			show  bool
-		}{rolesPanel, true})
+		visiblePanels++
 	}
 	if showIndices {
-		visiblePanels = append(visiblePanels, struct {
-			panel *tview.TextView
-			show  bool
-		}{indicesPanel, true})
+		visiblePanels++
 	}
 	if showMetrics {
-		visiblePanels = append(visiblePanels, struct {
-			panel *tview.TextView
-			show  bool
-		}{metricsPanel, true})
+		visiblePanels++
 	}
 
 	// Adjust row configuration based on whether nodes panel is shown
@@ -487,32 +474,54 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 		grid.SetRows(3, 0) // Just header and bottom panels
 	}
 
-	// Set up columns based on number of visible panels
-	switch len(visiblePanels) {
-	case 3:
-		grid.SetColumns(-1, -2, -1) // 1:2:1 ratio
-	case 2:
-		grid.SetColumns(-1, -1) // Two equal columns
-	case 1:
-		grid.SetColumns(-1) // Single column
+	// Configure columns based on visible panels
+	switch {
+	case visiblePanels == 3:
+		if showRoles {
+			grid.SetColumns(30, -2, -1) // Changed from 20 to 30 for roles panel width
+		}
+	case visiblePanels == 2:
+		if showRoles {
+			grid.SetColumns(30, 0) // Changed from 20 to 30 for roles panel width
+		} else {
+			grid.SetColumns(-1, -1) // Equal split between two panels
+		}
+	case visiblePanels == 1:
+		grid.SetColumns(0) // Single column takes full width
 	}
 
 	// Always show header at top spanning all columns
-	grid.AddItem(header, 0, 0, 1, len(visiblePanels), 0, 0, false)
+	grid.AddItem(header, 0, 0, 1, visiblePanels, 0, 0, false)
 
 	// Add nodes panel if visible, spanning all columns
 	if showNodes {
-		grid.AddItem(nodesPanel, 1, 0, 1, len(visiblePanels), 0, 0, false)
+		grid.AddItem(nodesPanel, 1, 0, 1, visiblePanels, 0, 0, false)
+	}
 
-		// Add bottom panels
-		for i, panel := range visiblePanels {
-			grid.AddItem(panel.panel, 2, i, 1, 1, 0, 0, false)
+	// Add bottom panels in their respective positions
+	col := 0
+	if showRoles {
+		row := 1
+		if showNodes {
+			row = 2
 		}
-	} else {
-		// Add bottom panels starting from row 1
-		for i, panel := range visiblePanels {
-			grid.AddItem(panel.panel, 1, i, 1, 1, 0, 0, false)
+		grid.AddItem(rolesPanel, row, col, 1, 1, 0, 0, false)
+		col++
+	}
+	if showIndices {
+		row := 1
+		if showNodes {
+			row = 2
 		}
+		grid.AddItem(indicesPanel, row, col, 1, 1, 0, 0, false)
+		col++
+	}
+	if showMetrics {
+		row := 1
+		if showNodes {
+			row = 2
+		}
+		grid.AddItem(metricsPanel, row, col, 1, 1, 0, 0, false)
 	}
 }
 
@@ -545,7 +554,7 @@ func main() {
 
 	app := tview.NewApplication()
 
-	// Update the grid layout to use three columns for the bottom section
+	// Update the grid layout to use proportional columns
 	grid := tview.NewGrid().
 		SetRows(3, 0, 0).       // Three rows: header, nodes, bottom panels
 		SetColumns(-1, -2, -1). // Three columns for bottom row: roles (1), indices (2), metrics (1)
@@ -708,8 +717,18 @@ func main() {
 		fmt.Fprintf(nodesPanel, "[::b][#00ffff][[#ff5555]2[#00ffff]] Nodes Information[::-]\n\n")
 		fmt.Fprint(nodesPanel, getNodesPanelHeader(maxNodeNameLen))
 
+		// Create a sorted slice of node IDs based on node names
+		var nodeIDs []string
+		for id := range nodesInfo.Nodes {
+			nodeIDs = append(nodeIDs, id)
+		}
+		sort.Slice(nodeIDs, func(i, j int) bool {
+			return nodesInfo.Nodes[nodeIDs[i]].Name < nodesInfo.Nodes[nodeIDs[j]].Name
+		})
+
 		// Update node entries with dynamic width
-		for id, nodeInfo := range nodesInfo.Nodes {
+		for _, id := range nodeIDs {
+			nodeInfo := nodesInfo.Nodes[id]
 			nodeStats, exists := nodesStats.Nodes[id]
 			if !exists {
 				continue
@@ -850,7 +869,6 @@ func main() {
 
 		// Update index entries with dynamic width
 		for _, idx := range indices {
-			// Only show purple dot if there's actual indexing happening
 			writeIcon := "[#444444]⚪"
 			if idx.indexingRate > 0 {
 				writeIcon = "[#5555ff]⚫"
@@ -861,9 +879,11 @@ func main() {
 			ingestedStr := ""
 			if activity != nil && activity.InitialDocsCount < idx.docs {
 				docChange := idx.docs - activity.InitialDocsCount
-				ingestedStr = fmt.Sprintf("[green]+%-11s", formatNumber(docChange))
+				// Pad the ingested string to 12 characters
+				ingestedStr = fmt.Sprintf("[green]%-12s", fmt.Sprintf("+%s", formatNumber(docChange)))
 			} else {
-				ingestedStr = fmt.Sprintf("%-12s", "") // Empty space if no changes
+				// When there's no ingestion, still pad with 12 spaces
+				ingestedStr = fmt.Sprintf("%-12s", "")
 			}
 
 			// Format indexing rate
@@ -881,7 +901,7 @@ func main() {
 			// Convert the size format before display
 			sizeStr := convertSizeFormat(idx.storeSize)
 
-			fmt.Fprintf(indicesPanel, "%s [%s]%-*s  [white][#444444]│[white] %15s [#444444]│[white] %12s [#444444]│[white] %8s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-10s\n",
+			fmt.Fprintf(indicesPanel, "%s [%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %12s [#444444]│[white] %8s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
 				writeIcon,
 				getHealthColor(idx.health),
 				maxIndexNameLen,
@@ -890,7 +910,7 @@ func main() {
 				sizeStr,
 				idx.priShards,
 				idx.replicas,
-				ingestedStr,
+				ingestedStr, // Now properly padded
 				rateStr)
 		}
 
@@ -1072,7 +1092,7 @@ func main() {
 				updateGridLayout(grid, showRoles, showIndices, showMetrics)
 			case 'h':
 				showHiddenIndices = !showHiddenIndices
-				// Don't call update() directly, just let the periodic update handle it
+				// Let the regular update cycle handle it
 			}
 		}
 		return event
@@ -1126,17 +1146,19 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int) {
 		}
 	}
 
-	// Get max index name length
+	// Get max index name length only for visible indices
 	for _, index := range indicesStats {
-		// Consider hidden indices in max length calculation if they're shown
-		if (showHiddenIndices || !strings.HasPrefix(index.Index, ".")) &&
-			len(index.Index) > maxIndexNameLen {
-			maxIndexNameLen = len(index.Index)
+		// Only consider indices that should be visible based on showHiddenIndices
+		if (showHiddenIndices || !strings.HasPrefix(index.Index, ".")) && index.DocsCount != "0" {
+			if len(index.Index) > maxIndexNameLen {
+				maxIndexNameLen = len(index.Index)
+			}
 		}
 	}
 
-	maxNodeNameLen += 2  // Add padding
-	maxIndexNameLen += 2 // Add padding
+	// Add padding
+	maxNodeNameLen += 2
+	maxIndexNameLen += 1 // Single space before separator
 
 	return maxNodeNameLen, maxIndexNameLen
 }
@@ -1157,7 +1179,7 @@ func getNodesPanelHeader(maxNodeNameLen int) string {
 }
 
 func getIndicesPanelHeader(maxIndexNameLen int) string {
-	return fmt.Sprintf("   [::b]%-*s  [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %12s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-10s[white]\n",
+	return fmt.Sprintf("   [::b]%-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %12s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
 		maxIndexNameLen,
 		"Index Name",
 		"Documents",
