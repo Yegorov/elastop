@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -515,11 +516,31 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 }
 
 func main() {
-	host := flag.String("host", "localhost", "Elasticsearch host")
+	host := flag.String("host", "http://localhost", "Elasticsearch host URL (e.g., http://localhost or https://example.com)")
 	port := flag.Int("port", 9200, "Elasticsearch port")
 	user := flag.String("user", "elastic", "Elasticsearch username")
 	password := flag.String("password", os.Getenv("ES_PASSWORD"), "Elasticsearch password")
 	flag.Parse()
+
+	// Validate and process the host URL
+	if !strings.HasPrefix(*host, "http://") && !strings.HasPrefix(*host, "https://") {
+		fmt.Fprintf(os.Stderr, "Error: host must start with http:// or https://\n")
+		os.Exit(1)
+	}
+
+	// Strip any trailing slash from the host
+	*host = strings.TrimRight(*host, "/")
+
+	// Create custom HTTP client with SSL configuration
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Allow self-signed certificates
+		},
+	}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   time.Second * 10,
+	}
 
 	app := tview.NewApplication()
 
@@ -558,8 +579,7 @@ func main() {
 
 	// Update function
 	update := func() {
-		baseURL := fmt.Sprintf("http://%s:%d", *host, *port)
-		client := &http.Client{}
+		baseURL := fmt.Sprintf("%s:%d", *host, *port)
 
 		// Helper function for ES requests
 		makeRequest := func(path string, target interface{}) error {
