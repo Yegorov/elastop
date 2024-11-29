@@ -207,10 +207,11 @@ type CatNodesStats struct {
 }
 
 var (
-	showNodes   = true
-	showRoles   = true
-	showIndices = true
-	showMetrics = true
+	showNodes         = true
+	showRoles         = true
+	showIndices       = true
+	showMetrics       = true
+	showHiddenIndices = false
 )
 
 var (
@@ -700,7 +701,7 @@ func main() {
 			clusterStats.Nodes.Total,
 			clusterStats.Nodes.Successful,
 			clusterStats.Nodes.Failed)
-		fmt.Fprintf(header, "[#666666]Press 2-5 to toggle panels, 'q' to quit[white]\n")
+		fmt.Fprintf(header, "[#666666]Press 2-5 to toggle panels, 'h' to toggle hidden indices, 'q' to quit[white]\n")
 
 		// Update nodes panel with dynamic width
 		nodesPanel.Clear()
@@ -792,48 +793,49 @@ func main() {
 
 		// Collect index information
 		for _, index := range indicesStats {
-			// Skip hidden indices
-			if !strings.HasPrefix(index.Index, ".") && index.DocsCount != "0" {
-				docs := 0
-				fmt.Sscanf(index.DocsCount, "%d", &docs)
-				totalDocs += docs
-
-				// Track document changes
-				activity, exists := indexActivities[index.Index]
-				if !exists {
-					indexActivities[index.Index] = &IndexActivity{
-						LastDocsCount:    docs,
-						InitialDocsCount: docs,
-						StartTime:        time.Now(),
-					}
-				} else {
-					activity.LastDocsCount = docs
-				}
-
-				// Get write operations count and calculate rate
-				writeOps := int64(0)
-				indexingRate := float64(0)
-				if stats, exists := indexWriteStats.Indices[index.Index]; exists {
-					writeOps = stats.Total.Indexing.IndexTotal
-					if activity, ok := indexActivities[index.Index]; ok {
-						timeDiff := time.Since(activity.StartTime).Seconds()
-						if timeDiff > 0 {
-							indexingRate = float64(docs-activity.InitialDocsCount) / timeDiff
-						}
-					}
-				}
-
-				indices = append(indices, indexInfo{
-					index:        index.Index,
-					health:       index.Health,
-					docs:         docs,
-					storeSize:    index.StoreSize,
-					priShards:    index.PriShards,
-					replicas:     index.Replicas,
-					writeOps:     writeOps,
-					indexingRate: indexingRate,
-				})
+			// Skip hidden indices unless showHiddenIndices is true
+			if (!showHiddenIndices && strings.HasPrefix(index.Index, ".")) || index.DocsCount == "0" {
+				continue
 			}
+			docs := 0
+			fmt.Sscanf(index.DocsCount, "%d", &docs)
+			totalDocs += docs
+
+			// Track document changes
+			activity, exists := indexActivities[index.Index]
+			if !exists {
+				indexActivities[index.Index] = &IndexActivity{
+					LastDocsCount:    docs,
+					InitialDocsCount: docs,
+					StartTime:        time.Now(),
+				}
+			} else {
+				activity.LastDocsCount = docs
+			}
+
+			// Get write operations count and calculate rate
+			writeOps := int64(0)
+			indexingRate := float64(0)
+			if stats, exists := indexWriteStats.Indices[index.Index]; exists {
+				writeOps = stats.Total.Indexing.IndexTotal
+				if activity, ok := indexActivities[index.Index]; ok {
+					timeDiff := time.Since(activity.StartTime).Seconds()
+					if timeDiff > 0 {
+						indexingRate = float64(docs-activity.InitialDocsCount) / timeDiff
+					}
+				}
+			}
+
+			indices = append(indices, indexInfo{
+				index:        index.Index,
+				health:       index.Health,
+				docs:         docs,
+				storeSize:    index.StoreSize,
+				priShards:    index.PriShards,
+				replicas:     index.Replicas,
+				writeOps:     writeOps,
+				indexingRate: indexingRate,
+			})
 		}
 
 		// Calculate total size
@@ -1068,6 +1070,9 @@ func main() {
 			case '5':
 				showMetrics = !showMetrics
 				updateGridLayout(grid, showRoles, showIndices, showMetrics)
+			case 'h':
+				showHiddenIndices = !showHiddenIndices
+				// Don't call update() directly, just let the periodic update handle it
 			}
 		}
 		return event
@@ -1123,14 +1128,15 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int) {
 
 	// Get max index name length
 	for _, index := range indicesStats {
-		if !strings.HasPrefix(index.Index, ".") && // Skip hidden indices
+		// Consider hidden indices in max length calculation if they're shown
+		if (showHiddenIndices || !strings.HasPrefix(index.Index, ".")) &&
 			len(index.Index) > maxIndexNameLen {
 			maxIndexNameLen = len(index.Index)
 		}
 	}
 
-	maxNodeNameLen += 2
-	maxIndexNameLen += 2
+	maxNodeNameLen += 2  // Add padding
+	maxIndexNameLen += 2 // Add padding
 
 	return maxNodeNameLen, maxIndexNameLen
 }
