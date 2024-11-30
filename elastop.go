@@ -222,6 +222,17 @@ var (
 	metricsPanel *tview.TextView
 )
 
+type DataStreamResponse struct {
+	DataStreams []DataStream `json:"data_streams"`
+}
+
+type DataStream struct {
+	Name      string `json:"name"`
+	Timestamp string `json:"timestamp"`
+	Status    string `json:"status"`
+	Template  string `json:"template"`
+}
+
 func bytesToHuman(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -800,6 +811,13 @@ func main() {
 				nodeInfo.OS.Arch)
 		}
 
+		// Get data streams info
+		var dataStreamResp DataStreamResponse
+		if err := makeRequest("/_data_stream", &dataStreamResp); err != nil {
+			indicesPanel.SetText(fmt.Sprintf("[red]Error getting data streams: %v", err))
+			return
+		}
+
 		// Update indices panel with dynamic width
 		indicesPanel.Clear()
 		fmt.Fprintf(indicesPanel, "[::b][#00ffff][[#ff5555]4[#00ffff]] Indices Information[::-]\n\n")
@@ -864,7 +882,7 @@ func main() {
 
 		// Sort indices by document count (descending)
 		sort.Slice(indices, func(i, j int) bool {
-			return indices[i].docs > indices[j].docs
+			return indices[i].index < indices[j].index
 		})
 
 		// Update index entries with dynamic width
@@ -874,15 +892,19 @@ func main() {
 				writeIcon = "[#5555ff]⚫"
 			}
 
+			// Add data stream indicator
+			streamIndicator := " "
+			if isDataStream(idx.index, dataStreamResp) {
+				streamIndicator = "[#bd93f9]⚡[white]"
+			}
+
 			// Calculate document changes
 			activity := indexActivities[idx.index]
 			ingestedStr := ""
 			if activity != nil && activity.InitialDocsCount < idx.docs {
 				docChange := idx.docs - activity.InitialDocsCount
-				// Pad the ingested string to 12 characters
 				ingestedStr = fmt.Sprintf("[green]%-12s", fmt.Sprintf("+%s", formatNumber(docChange)))
 			} else {
-				// When there's no ingestion, still pad with 12 spaces
 				ingestedStr = fmt.Sprintf("%-12s", "")
 			}
 
@@ -901,8 +923,9 @@ func main() {
 			// Convert the size format before display
 			sizeStr := convertSizeFormat(idx.storeSize)
 
-			fmt.Fprintf(indicesPanel, "%s [%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %12s [#444444]│[white] %8s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
+			fmt.Fprintf(indicesPanel, "%s %s[%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %12s [#444444]│[white] %8s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
 				writeIcon,
+				streamIndicator,
 				getHealthColor(idx.health),
 				maxIndexNameLen,
 				idx.index,
@@ -910,7 +933,7 @@ func main() {
 				sizeStr,
 				idx.priShards,
 				idx.replicas,
-				ingestedStr, // Now properly padded
+				ingestedStr,
 				rateStr)
 		}
 
@@ -1179,7 +1202,7 @@ func getNodesPanelHeader(maxNodeNameLen int) string {
 }
 
 func getIndicesPanelHeader(maxIndexNameLen int) string {
-	return fmt.Sprintf("   [::b]%-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %12s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
+	return fmt.Sprintf("   [::b] %-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %12s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
 		maxIndexNameLen,
 		"Index Name",
 		"Documents",
@@ -1188,4 +1211,13 @@ func getIndicesPanelHeader(maxIndexNameLen int) string {
 		"Replicas",
 		"Ingested",
 		"Rate")
+}
+
+func isDataStream(name string, dataStreams DataStreamResponse) bool {
+	for _, ds := range dataStreams.DataStreams {
+		if ds.Name == name {
+			return true
+		}
+	}
+	return false
 }
