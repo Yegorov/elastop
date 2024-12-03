@@ -932,8 +932,13 @@ func main() {
 			totalSize += node.FS.Total.TotalInBytes - node.FS.Total.AvailableInBytes
 		}
 
-		// Sort indices by document count (descending)
+		// Sort indices - active ones first, then alphabetically within each group
 		sort.Slice(indices, func(i, j int) bool {
+			// If one is active and the other isn't, active goes first
+			if (indices[i].indexingRate > 0) != (indices[j].indexingRate > 0) {
+				return indices[i].indexingRate > 0
+			}
+			// Within the same group (both active or both inactive), sort alphabetically
 			return indices[i].index < indices[j].index
 		})
 
