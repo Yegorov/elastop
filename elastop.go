@@ -731,7 +731,7 @@ func main() {
 		}[clusterStats.Status]
 
 		// Get max lengths after fetching node and index info
-		maxNodeNameLen, maxIndexNameLen := getMaxLengths(nodesInfo, indicesStats)
+		maxNodeNameLen, maxIndexNameLen, maxTransportLen := getMaxLengths(nodesInfo, indicesStats)
 
 		// Update header with dynamic padding
 		header.Clear()
@@ -740,13 +740,13 @@ func main() {
 		if maxNodeNameLen > len(clusterStats.ClusterName) {
 			padding = maxNodeNameLen - len(clusterStats.ClusterName)
 		}
-		fmt.Fprintf(header, "[#00ffff]Cluster:[white] %s [%s]%s[-]%s[#00ffff]Latest: [white]%s\n",
+		fmt.Fprintf(header, "[#00ffff]Cluster :[white] %s [#666666]([%s]%s[-]%s[#666666]) [#00ffff]Latest: [white]%s\n",
 			clusterStats.ClusterName,
 			statusColor,
 			strings.ToUpper(clusterStats.Status),
 			strings.Repeat(" ", padding),
 			latestVer)
-		fmt.Fprintf(header, "[#00ffff]Nodes:[white] %d Total, [green]%d[white] Successful, [#ff5555]%d[white] Failed\n",
+		fmt.Fprintf(header, "[#00ffff]Nodes   :[white] %d Total, [green]%d[white] Successful, [#ff5555]%d[white] Failed\n",
 			clusterStats.Nodes.Total,
 			clusterStats.Nodes.Successful,
 			clusterStats.Nodes.Failed)
@@ -755,7 +755,7 @@ func main() {
 		// Update nodes panel with dynamic width
 		nodesPanel.Clear()
 		fmt.Fprintf(nodesPanel, "[::b][#00ffff][[#ff5555]2[#00ffff]] Nodes Information[::-]\n\n")
-		fmt.Fprint(nodesPanel, getNodesPanelHeader(maxNodeNameLen))
+		fmt.Fprint(nodesPanel, getNodesPanelHeader(maxNodeNameLen, maxTransportLen))
 
 		// Create a sorted slice of node IDs based on node names
 		var nodeIDs []string
@@ -812,10 +812,29 @@ func main() {
 				nodeLoads[node.Name] = node.Load1m
 			}
 
-			fmt.Fprintf(nodesPanel, "[#5555ff]%-*s  [white] [#444444]│[white] %s [#444444]│[white] [white]%-20s[white] [#444444]│[white] [%s]%-7s[white] [#444444]│[white] [%s]%3d%% [#444444](%d)[white] [#444444]│[white] %4s [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %s [#bd93f9]%s[white] [#444444](%s)[white]\n",
+			// In the update() function, add this request before processing nodes:
+			var threadPoolStats []ThreadPoolStats
+			if err := makeRequest("/_cat/thread_pool/generic?format=json&h=node_name,name,active,queue,rejected,completed", &threadPoolStats); err != nil {
+				nodesPanel.SetText(fmt.Sprintf("[red]Error getting thread pool stats: %v", err))
+				return
+			}
+
+			// Create a map for quick lookup of thread pool stats by node name
+			threadPoolMap := make(map[string]ThreadPoolStats)
+			for _, stat := range threadPoolStats {
+				threadPoolMap[stat.NodeName] = stat
+			}
+
+			active, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Active)
+			queue, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Queue)
+			rejected, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Rejected)
+			completed, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Completed)
+
+			fmt.Fprintf(nodesPanel, "[#5555ff]%-*s  [white] [#444444]│[white] %s [#444444]│[white] [white]%-*s[white] [#444444]│[white] [%s]%-7s[white] [#444444]│[white] [%s]%3d%% [#444444](%d)[white] [#444444]│[white] %4s [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %6s [#444444]│[white] %5s [#444444]│[white] %8s [#444444]│[white] %9s [#444444]│[white] %s [#bd93f9]%s[white] [#444444](%s)[white]\n",
 				maxNodeNameLen,
 				nodeInfo.Name,
 				formatNodeRoles(nodeInfo.Roles),
+				maxTransportLen,
 				nodeInfo.TransportAddress,
 				versionColor,
 				nodeInfo.Version,
@@ -835,6 +854,10 @@ func main() {
 				formatResourceSize(diskTotal),
 				getPercentageColor(diskPercent),
 				int(diskPercent),
+				formatNumber(active),
+				formatNumber(queue),
+				formatNumber(rejected),
+				formatNumber(completed),
 				nodeInfo.OS.PrettyName,
 				nodeInfo.OS.Version,
 				nodeInfo.OS.Arch)
@@ -1187,14 +1210,18 @@ func getTotalNetworkRX(stats NodesStats) int64 {
 	return total
 }
 
-func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int) {
+func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int) {
 	maxNodeNameLen := 0
 	maxIndexNameLen := 0
+	maxTransportLen := 0
 
-	// Get max node name length
+	// Get max node name and transport address length
 	for _, nodeInfo := range nodesInfo.Nodes {
 		if len(nodeInfo.Name) > maxNodeNameLen {
 			maxNodeNameLen = len(nodeInfo.Name)
+		}
+		if len(nodeInfo.TransportAddress) > maxTransportLen {
+			maxTransportLen = len(nodeInfo.TransportAddress)
 		}
 	}
 
@@ -1211,22 +1238,28 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int) {
 	// Add padding
 	maxNodeNameLen += 2
 	maxIndexNameLen += 1 // Single space before separator
+	maxTransportLen += 2 // Add some padding for transport address
 
-	return maxNodeNameLen, maxIndexNameLen
+	return maxNodeNameLen, maxIndexNameLen, maxTransportLen
 }
 
-func getNodesPanelHeader(maxNodeNameLen int) string {
-	return fmt.Sprintf("[::b]%-*s  [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %-20s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %4s      [#444444]│[#00ffff] %4s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-25s[white]\n",
+func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
+	return fmt.Sprintf("[::b]%-*s  [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %-*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %4s      [#444444]│[#00ffff] %4s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %6s [#444444]│[#00ffff] %5s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %9s [#444444]│[#00ffff] %-25s[white]\n",
 		maxNodeNameLen,
 		"Node Name",
 		"Roles",
+		maxTransportLen,
 		"Transport Address",
 		"Version",
 		"CPU",
 		"Load",
 		"Memory",
 		"Heap",
-		"Disk ",
+		"Disk",
+		"Active",
+		"Queue",
+		"Rejected",
+		"Completed",
 		"OS")
 }
 
@@ -1249,4 +1282,14 @@ func isDataStream(name string, dataStreams DataStreamResponse) bool {
 		}
 	}
 	return false
+}
+
+// Add this with the other type definitions near the top of the file
+type ThreadPoolStats struct {
+	NodeName  string `json:"node_name"`
+	Name      string `json:"name"`
+	Active    string `json:"active"`
+	Queue     string `json:"queue"`
+	Rejected  string `json:"rejected"`
+	Completed string `json:"completed"`
 }
