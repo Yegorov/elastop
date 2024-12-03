@@ -233,6 +233,10 @@ type DataStream struct {
 	Template  string `json:"template"`
 }
 
+var (
+	apiKey string
+)
+
 func bytesToHuman(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -539,13 +543,25 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 func main() {
 	host := flag.String("host", "http://localhost", "Elasticsearch host URL (e.g., http://localhost or https://example.com)")
 	port := flag.Int("port", 9200, "Elasticsearch port")
-	user := flag.String("user", "elastic", "Elasticsearch username")
+	user := flag.String("user", os.Getenv("ES_USER"), "Elasticsearch username")
 	password := flag.String("password", os.Getenv("ES_PASSWORD"), "Elasticsearch password")
+	flag.StringVar(&apiKey, "apikey", os.Getenv("ES_API_KEY"), "Elasticsearch API key")
 	flag.Parse()
 
 	// Validate and process the host URL
 	if !strings.HasPrefix(*host, "http://") && !strings.HasPrefix(*host, "https://") {
 		fmt.Fprintf(os.Stderr, "Error: host must start with http:// or https://\n")
+		os.Exit(1)
+	}
+
+	// Validate authentication
+	if apiKey != "" && (*user != "" || *password != "") {
+		fmt.Fprintf(os.Stderr, "Error: Cannot use both API key and username/password authentication\n")
+		os.Exit(1)
+	}
+
+	if apiKey == "" && (*user == "" || *password == "") {
+		fmt.Fprintf(os.Stderr, "Error: Must provide either API key or both username and password\n")
 		os.Exit(1)
 	}
 
@@ -608,12 +624,25 @@ func main() {
 			if err != nil {
 				return err
 			}
-			req.SetBasicAuth(*user, *password)
+
+			// Set authentication
+			if apiKey != "" {
+				req.Header.Set("Authorization", fmt.Sprintf("ApiKey %s", apiKey))
+			} else {
+				req.SetBasicAuth(*user, *password)
+			}
+
 			resp, err := client.Do(req)
 			if err != nil {
 				return err
 			}
 			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+			}
+
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
