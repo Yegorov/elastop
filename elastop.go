@@ -32,10 +32,6 @@ type ClusterStats struct {
 			SizeInBytes      int64 `json:"size_in_bytes"`
 			TotalSizeInBytes int64 `json:"total_size_in_bytes"`
 		} `json:"store"`
-		Mappings struct {
-			TotalDeduplicatedFieldCount         int   `json:"total_deduplicated_field_count"`
-			TotalDeduplicatedMappingSizeInBytes int64 `json:"total_deduplicated_mapping_size_in_bytes"`
-		} `json:"mappings"`
 	} `json:"indices"`
 	Nodes struct {
 		Total      int `json:"total"`
@@ -71,18 +67,8 @@ type NodesInfo struct {
 			PrettyName          string `json:"pretty_name"`
 		} `json:"os"`
 		Process struct {
-			ID       int  `json:"id"`
-			Mlockall bool `json:"mlockall"`
+			ID int `json:"id"`
 		} `json:"process"`
-		Settings struct {
-			Node struct {
-				Attr struct {
-					ML struct {
-						MachineMem string `json:"machine_memory"`
-					} `json:"ml"`
-				} `json:"attr"`
-			} `json:"node"`
-		} `json:"settings"`
 	} `json:"nodes"`
 }
 
@@ -97,7 +83,6 @@ type IndexStats []struct {
 
 type IndexActivity struct {
 	LastDocsCount    int
-	IsActive         bool
 	InitialDocsCount int
 	StartTime        time.Time
 }
@@ -213,17 +198,6 @@ var (
 
 var indexActivities = make(map[string]*IndexActivity)
 
-type IngestionEvent struct {
-	Index     string
-	DocCount  int
-	Timestamp time.Time
-}
-
-type CatNodesStats struct {
-	Load1m string `json:"load_1m"`
-	Name   string `json:"name"`
-}
-
 var (
 	showNodes         = true
 	showRoles         = true
@@ -254,6 +228,11 @@ type DataStream struct {
 var (
 	apiKey string
 )
+
+type CatNodesStats struct {
+	Load1m string `json:"load_1m"`
+	Name   string `json:"name"`
+}
 
 func bytesToHuman(bytes int64) string {
 	const unit = 1024
@@ -294,24 +273,6 @@ func convertSizeFormat(sizeStr string) string {
 	unit = strings.ToUpper(strings.TrimSuffix(unit, "b"))
 
 	return fmt.Sprintf("%d%s", int(size), unit)
-}
-
-func formatResourceSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%4d B", bytes)
-	}
-
-	units := []string{"B", "K", "M", "G", "T", "P"}
-	exp := 0
-	val := float64(bytes)
-
-	for val >= unit && exp < len(units)-1 {
-		val /= unit
-		exp++
-	}
-
-	return fmt.Sprintf("%3d%s", int(val), units[exp])
 }
 
 func getPercentageColor(percent float64) string {
@@ -382,9 +343,9 @@ var roleColors = map[string]string{
 	"data_warm":             "#bd93f9", // purple
 	"data_cold":             "#f1fa8c", // yellow
 	"data_frozen":           "#ff79c6", // pink
-	"ingest":                "#87cefa", // light sky blue (was gray)
+	"ingest":                "#87cefa", // light sky blue
 	"ml":                    "#6272a4", // blue gray
-	"remote_cluster_client": "#dda0dd", // plum (was burgundy)
+	"remote_cluster_client": "#dda0dd", // plum
 	"transform":             "#689d6a", // forest green
 	"voting_only":           "#458588", // teal
 	"coordinating_only":     "#d65d0e", // burnt orange
@@ -430,12 +391,21 @@ func formatNodeRoles(roles []string) string {
 		nodeRoles[role] = true
 	}
 
-	// Create ordered list of role keys for consistent display
+	// Create ordered list of role keys based on their letters
 	orderedRoles := []string{
-		"master", "data", "data_content", "data_hot",
-		"data_warm", "data_cold", "data_frozen", "ingest",
-		"ml", "remote_cluster_client", "transform",
-		"voting_only", "coordinating_only",
+		"data_content",          // C
+		"data",                  // D
+		"data_frozen",           // F
+		"data_hot",              // H
+		"ingest",                // I
+		"data_cold",             // K
+		"ml",                    // L
+		"master",                // M
+		"coordinating_only",     // O
+		"remote_cluster_client", // R
+		"transform",             // T
+		"voting_only",           // V
+		"data_warm",             // W
 	}
 
 	result := ""
@@ -492,7 +462,18 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 		visiblePanels++
 	}
 
-	// Adjust row configuration based on whether nodes panel is shown
+	// When only nodes panel is visible, use a single column layout
+	if showNodes && visiblePanels == 0 {
+		grid.SetRows(3, 0) // Header and nodes only
+		grid.SetColumns(0) // Single full-width column
+
+		// Add header and nodes panel
+		grid.AddItem(header, 0, 0, 1, 1, 0, 0, false)
+		grid.AddItem(nodesPanel, 1, 0, 1, 1, 0, 0, false)
+		return
+	}
+
+	// Rest of the layout logic for when bottom panels are visible
 	if showNodes {
 		grid.SetRows(3, 0, 0) // Header, nodes, bottom panels
 	} else {
@@ -503,16 +484,16 @@ func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool
 	switch {
 	case visiblePanels == 3:
 		if showRoles {
-			grid.SetColumns(30, -2, -1) // Changed from 20 to 30 for roles panel width
+			grid.SetColumns(30, -2, -1)
 		}
 	case visiblePanels == 2:
 		if showRoles {
-			grid.SetColumns(30, 0) // Changed from 20 to 30 for roles panel width
+			grid.SetColumns(30, 0)
 		} else {
-			grid.SetColumns(-1, -1) // Equal split between two panels
+			grid.SetColumns(-1, -1)
 		}
 	case visiblePanels == 1:
-		grid.SetColumns(0) // Single column takes full width
+		grid.SetColumns(0)
 	}
 
 	// Always show header at top spanning all columns
@@ -702,35 +683,35 @@ func main() {
 			return
 		}
 
-		// Calculate aggregate metrics
+		// Query and indexing metrics
 		var (
-			totalQueries       int64
-			totalQueryTime     float64
-			totalIndexing      int64
-			totalIndexingTime  float64
-			totalCPUPercent    int
-			totalMemoryUsed    int64
-			totalMemoryTotal   int64
-			totalHeapUsed      int64
-			totalHeapMax       int64
-			totalGCCollections int64
-			totalGCTime        float64
-			nodeCount          int
+			totalQueries   int64
+			totalQueryTime int64
+			totalIndexing  int64
+			totalIndexTime int64
+			totalSegments  int64
 		)
 
 		for _, node := range nodesStats.Nodes {
 			totalQueries += node.Indices.Search.QueryTotal
-			totalQueryTime += float64(node.Indices.Search.QueryTimeInMillis) / 1000
+			totalQueryTime += node.Indices.Search.QueryTimeInMillis
 			totalIndexing += node.Indices.Indexing.IndexTotal
-			totalIndexingTime += float64(node.Indices.Indexing.IndexTimeInMillis) / 1000
-			totalCPUPercent += node.OS.CPU.Percent
-			totalMemoryUsed += node.OS.Memory.UsedInBytes
-			totalMemoryTotal += node.OS.Memory.TotalInBytes
-			totalHeapUsed += node.JVM.Memory.HeapUsedInBytes
-			totalHeapMax += node.JVM.Memory.HeapMaxInBytes
+			totalIndexTime += node.Indices.Indexing.IndexTimeInMillis
+			totalSegments += node.Indices.Segments.Count
+		}
+
+		queryRate := float64(totalQueries) / float64(totalQueryTime) * 1000  // queries per second
+		indexRate := float64(totalIndexing) / float64(totalIndexTime) * 1000 // docs per second
+
+		// GC metrics
+		var (
+			totalGCCollections int64
+			totalGCTime        int64
+		)
+
+		for _, node := range nodesStats.Nodes {
 			totalGCCollections += node.JVM.GC.Collectors.Young.CollectionCount + node.JVM.GC.Collectors.Old.CollectionCount
-			totalGCTime += float64(node.JVM.GC.Collectors.Young.CollectionTimeInMillis+node.JVM.GC.Collectors.Old.CollectionTimeInMillis) / 1000
-			nodeCount++
+			totalGCTime += node.JVM.GC.Collectors.Young.CollectionTimeInMillis + node.JVM.GC.Collectors.Old.CollectionTimeInMillis
 		}
 
 		// Update header
@@ -741,7 +722,7 @@ func main() {
 		}[clusterStats.Status]
 
 		// Get max lengths after fetching node and index info
-		maxNodeNameLen, maxIndexNameLen, maxTransportLen := getMaxLengths(nodesInfo, indicesStats)
+		maxNodeNameLen, maxIndexNameLen, maxTransportLen, maxIngestedLen := getMaxLengths(nodesInfo, indicesStats)
 
 		// Update header with dynamic padding
 		header.Clear()
@@ -861,7 +842,7 @@ func main() {
 		// Update indices panel with dynamic width
 		indicesPanel.Clear()
 		fmt.Fprintf(indicesPanel, "[::b][#00ffff][[#ff5555]4[#00ffff]] Indices Information[::-]\n\n")
-		fmt.Fprint(indicesPanel, getIndicesPanelHeader(maxIndexNameLen))
+		fmt.Fprint(indicesPanel, getIndicesPanelHeader(maxIndexNameLen, maxIngestedLen))
 
 		// Update index entries with dynamic width
 		var indices []indexInfo
@@ -943,14 +924,14 @@ func main() {
 				streamIndicator = "[#bd93f9]⚫[white]"
 			}
 
-			// Calculate document changes
+			// Calculate document changes with dynamic padding
 			activity := indexActivities[idx.index]
 			ingestedStr := ""
 			if activity != nil && activity.InitialDocsCount < idx.docs {
 				docChange := idx.docs - activity.InitialDocsCount
-				ingestedStr = fmt.Sprintf("[green]%-12s", fmt.Sprintf("+%s", formatNumber(docChange)))
+				ingestedStr = fmt.Sprintf("[green]%-*s", maxIngestedLen, fmt.Sprintf("+%s", formatNumber(docChange)))
 			} else {
-				ingestedStr = fmt.Sprintf("%-12s", "")
+				ingestedStr = fmt.Sprintf("%-*s", maxIngestedLen, "")
 			}
 
 			// Format indexing rate
@@ -968,16 +949,17 @@ func main() {
 			// Convert the size format before display
 			sizeStr := convertSizeFormat(idx.storeSize)
 
-			fmt.Fprintf(indicesPanel, "%s %s[%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %5s [#444444]│[white] %6s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
+			fmt.Fprintf(indicesPanel, "%s %s[%s]%-*s[white] [#444444]│[white] %13s [#444444]│[white] %5s [#444444]│[white] %6s [#444444]│[white] %8s [#444444]│[white] %-*s [#444444]│[white] %-8s\n",
 				writeIcon,
 				streamIndicator,
 				getHealthColor(idx.health),
-				maxIndexNameLen-1,
+				maxIndexNameLen,
 				idx.index,
 				formatNumber(idx.docs),
 				sizeStr,
 				idx.priShards,
 				idx.replicas,
+				maxIngestedLen,
 				ingestedStr,
 				rateStr)
 		}
@@ -1021,17 +1003,28 @@ func main() {
 		metricsPanel.Clear()
 		fmt.Fprintf(metricsPanel, "[::b][#00ffff][[#ff5555]5[#00ffff]] Cluster Metrics[::-]\n\n")
 
-		// Define metrics keys and find the longest one
+		// Define metrics keys with proper grouping
 		metricKeys := []string{
+			// System metrics
 			"CPU",
-			"Disk",
-			"Heap",
 			"Memory",
+			"Heap",
+			"Disk",
+
+			// Network metrics
 			"Network TX",
 			"Network RX",
+			"HTTP Connections",
+
+			// Performance metrics
+			"Query Rate",
+			"Index Rate",
+
+			// Miscellaneous
 			"Snapshots",
 		}
 
+		// Find the longest key for proper alignment
 		maxKeyLength := 0
 		for _, key := range metricKeys {
 			if len(key) > maxKeyLength {
@@ -1039,21 +1032,21 @@ func main() {
 			}
 		}
 
-		// Helper function for metric lines with dynamic key padding
+		// Add padding for better visual separation
+		maxKeyLength += 2
+
+		// Helper function for metric lines with proper alignment
 		formatMetric := func(name string, value string) string {
 			return fmt.Sprintf("[#00ffff]%-*s[white] %s\n", maxKeyLength, name+":", value)
 		}
 
-		// CPU metrics - show only CPU percent and total processors
+		// CPU metrics
 		totalProcessors := 0
 		for _, node := range nodesInfo.Nodes {
 			totalProcessors += node.OS.AvailableProcessors
 		}
 		cpuPercent := float64(clusterStats.Process.CPU.Percent)
-		fmt.Fprint(metricsPanel, formatMetric("CPU", fmt.Sprintf("[%s]%7.1f%%[white] [#444444](%d processors)[white]",
-			getPercentageColor(cpuPercent),
-			cpuPercent,
-			totalProcessors)))
+		fmt.Fprint(metricsPanel, formatMetric("CPU", fmt.Sprintf("%7.1f%% [#444444](%d processors)[white]", cpuPercent, totalProcessors)))
 
 		// Disk metrics
 		diskUsed := getTotalSize(nodesStats)
@@ -1065,13 +1058,22 @@ func main() {
 			getPercentageColor(diskPercent),
 			diskPercent)))
 
-		// Calculate heap totals
-		totalHeapUsed = 0
-		totalHeapMax = 0
+		// Calculate heap and memory totals
+		var (
+			totalHeapUsed    int64
+			totalHeapMax     int64
+			totalMemoryUsed  int64
+			totalMemoryTotal int64
+		)
+
 		for _, node := range nodesStats.Nodes {
 			totalHeapUsed += node.JVM.Memory.HeapUsedInBytes
 			totalHeapMax += node.JVM.Memory.HeapMaxInBytes
+			totalMemoryUsed += node.OS.Memory.UsedInBytes
+			totalMemoryTotal += node.OS.Memory.TotalInBytes
 		}
+
+		// Heap metrics
 		heapPercent := float64(totalHeapUsed) / float64(totalHeapMax) * 100
 		fmt.Fprint(metricsPanel, formatMetric("Heap", fmt.Sprintf("%8s / %8s [%s]%5.1f%%[white]",
 			bytesToHuman(totalHeapUsed),
@@ -1079,13 +1081,7 @@ func main() {
 			getPercentageColor(heapPercent),
 			heapPercent)))
 
-		// Calculate memory totals
-		totalMemoryUsed = 0
-		totalMemoryTotal = 0
-		for _, node := range nodesStats.Nodes {
-			totalMemoryUsed += node.OS.Memory.UsedInBytes
-			totalMemoryTotal += node.OS.Memory.TotalInBytes
-		}
+		// Memory metrics
 		memoryPercent := float64(totalMemoryUsed) / float64(totalMemoryTotal) * 100
 		fmt.Fprint(metricsPanel, formatMetric("Memory", fmt.Sprintf("%8s / %8s [%s]%5.1f%%[white]",
 			bytesToHuman(totalMemoryUsed),
@@ -1094,50 +1090,19 @@ func main() {
 			memoryPercent)))
 
 		// Network metrics
-		fmt.Fprint(metricsPanel, formatMetric("Network TX", fmt.Sprintf("%7s", bytesToHuman(getTotalNetworkTX(nodesStats)))))
-		fmt.Fprint(metricsPanel, formatMetric("Network RX", fmt.Sprintf("%7s", bytesToHuman(getTotalNetworkRX(nodesStats)))))
-		fmt.Fprint(metricsPanel, formatMetric("Snapshots", fmt.Sprintf("%7d", clusterStats.Snapshots.Count)))
+		fmt.Fprint(metricsPanel, formatMetric("Network TX", fmt.Sprintf(" %7s", bytesToHuman(getTotalNetworkTX(nodesStats)))))
+		fmt.Fprint(metricsPanel, formatMetric("Network RX", fmt.Sprintf(" %7s", bytesToHuman(getTotalNetworkRX(nodesStats)))))
 
-		// Update roles panel
-		rolesPanel.Clear()
-		fmt.Fprintf(rolesPanel, "[::b][#00ffff][[#ff5555]3[#00ffff]] Node Roles[::-]\n\n")
+		// HTTP Connections and Shard metrics - right aligned to match Network RX 'G'
+		fmt.Fprint(metricsPanel, formatMetric("HTTP Connections", fmt.Sprintf("%8s", formatNumber(int(getTotalHTTPConnections(nodesStats))))))
+		fmt.Fprint(metricsPanel, formatMetric("Query Rate", fmt.Sprintf("%6s/s", formatNumber(int(queryRate)))))
+		fmt.Fprint(metricsPanel, formatMetric("Index Rate", fmt.Sprintf("%6s/s", formatNumber(int(indexRate)))))
 
-		// Create a map of used roles
-		usedRoles := make(map[string]bool)
-		for _, nodeInfo := range nodesInfo.Nodes {
-			for _, role := range nodeInfo.Roles {
-				usedRoles[role] = true
-			}
-		}
+		// Snapshots
+		fmt.Fprint(metricsPanel, formatMetric("Snapshots", fmt.Sprintf("%8s", formatNumber(clusterStats.Snapshots.Count))))
 
-		// Display roles in the roles panel
-		roleLegend := [][2]string{
-			{"C", "data_content"},
-			{"D", "data"},
-			{"F", "data_frozen"},
-			{"H", "data_hot"},
-			{"I", "ingest"},
-			{"K", "data_cold"},
-			{"L", "ml"},
-			{"M", "master"},
-			{"O", "coordinating_only"},
-			{"R", "remote_cluster_client"},
-			{"T", "transform"},
-			{"V", "voting_only"},
-			{"W", "data_warm"},
-		}
-
-		for _, role := range roleLegend {
-			if usedRoles[role[1]] {
-				fmt.Fprintf(rolesPanel, "[%s]%s[white] %s\n",
-					roleColors[role[1]],
-					role[0],
-					legendLabels[role[1]])
-			} else {
-				fmt.Fprintf(rolesPanel, "[#444444]%s %s\n",
-					role[0],
-					legendLabels[role[1]])
-			}
+		if showRoles {
+			updateRolesPanel(rolesPanel, nodesInfo)
 		}
 	}
 
@@ -1201,10 +1166,11 @@ func getTotalNetworkRX(stats NodesStats) int64 {
 	return total
 }
 
-func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int) {
+func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int, int) {
 	maxNodeNameLen := 0
 	maxIndexNameLen := 0
 	maxTransportLen := 0
+	maxIngestedLen := 8 // Start with "Ingested" header length
 
 	// Get max node name and transport address length
 	for _, nodeInfo := range nodesInfo.Nodes {
@@ -1216,26 +1182,38 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int)
 		}
 	}
 
-	// Get max index name length only for visible indices
+	// Get max index name length and calculate max ingested length
 	for _, index := range indicesStats {
-		// Only consider indices that should be visible based on showHiddenIndices
 		if (showHiddenIndices || !strings.HasPrefix(index.Index, ".")) && index.DocsCount != "0" {
 			if len(index.Index) > maxIndexNameLen {
 				maxIndexNameLen = len(index.Index)
+			}
+
+			docs := 0
+			fmt.Sscanf(index.DocsCount, "%d", &docs)
+			if activity := indexActivities[index.Index]; activity != nil {
+				if activity.InitialDocsCount < docs {
+					docChange := docs - activity.InitialDocsCount
+					ingestedStr := fmt.Sprintf("+%s", formatNumber(docChange))
+					if len(ingestedStr) > maxIngestedLen {
+						maxIngestedLen = len(ingestedStr)
+					}
+				}
 			}
 		}
 	}
 
 	// Add padding
 	maxNodeNameLen += 2
-	maxIndexNameLen += 1 // Single space before separator
-	maxTransportLen += 2 // Add some padding for transport address
+	maxIndexNameLen += 1 // Changed from 2 to 1 for minimal padding
+	maxTransportLen += 2
+	maxIngestedLen += 1 // Minimal padding for ingested column
 
-	return maxNodeNameLen, maxIndexNameLen, maxTransportLen
+	return maxNodeNameLen, maxIndexNameLen, maxTransportLen, maxIngestedLen
 }
 
 func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
-	return fmt.Sprintf("[::b]%-*s [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %-9s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-6s [#444444]│[#00ffff] %-25s[white]\n",
+	return fmt.Sprintf("[::b]%-*s [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %-9s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-6s [#444444][#00ffff] %-25s[white]\n",
 		maxNodeNameLen,
 		"Node Name",
 		"Roles",
@@ -1250,14 +1228,15 @@ func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
 		"OS")
 }
 
-func getIndicesPanelHeader(maxIndexNameLen int) string {
-	return fmt.Sprintf("   [::b] %-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %5s [#444444]│[#00ffff] %6s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
-		maxIndexNameLen-1,
+func getIndicesPanelHeader(maxIndexNameLen, maxIngestedLen int) string {
+	return fmt.Sprintf("   [::b] %-*s [#444444]│[#00ffff] %13s [#444444]│[#00ffff] %5s [#444444]│[#00ffff] %6s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-*s [#444444][#00ffff] %-8s[white]\n",
+		maxIndexNameLen,
 		"Index Name",
 		"Documents",
 		"Size",
 		"Shards",
 		"Replicas",
+		maxIngestedLen,
 		"Ingested",
 		"Rate")
 }
@@ -1299,25 +1278,124 @@ func formatUptime(uptimeMillis int64) string {
 
 	var result string
 	if days > 0 {
-		result = fmt.Sprintf("%d[#ff66cc]d[white]%d[#ff66cc]h[white]", days, hours)
+		result = fmt.Sprintf("%d[#ff99cc]d[white]%d[#ff99cc]h[white]", days, hours)
 	} else if hours > 0 {
-		result = fmt.Sprintf("%d[#ff66cc]h[white]%d[#ff66cc]m[white]", hours, minutes)
+		result = fmt.Sprintf("%d[#ff99cc]h[white]%d[#ff99cc]m[white]", hours, minutes)
 	} else {
-		result = fmt.Sprintf("%d[#ff66cc]m[white]", minutes)
+		result = fmt.Sprintf("%d[#ff99cc]m[white]", minutes)
 	}
 
-	// Calculate the actual visible length (excluding color codes)
-	visibleLen := 0
-	if days > 0 {
-		visibleLen = len(fmt.Sprintf("%dd%dh", days, hours))
-	} else if hours > 0 {
-		visibleLen = len(fmt.Sprintf("%dh%dm", hours, minutes))
-	} else {
-		visibleLen = len(fmt.Sprintf("%dm", minutes))
+	// Calculate the actual display length by removing all color codes in one pass
+	displayLen := len(strings.NewReplacer(
+		"[#ff99cc]", "",
+		"[white]", "",
+	).Replace(result))
+
+	// Add padding to make all uptime strings align (6 chars for display)
+	padding := 6 - displayLen
+	if padding > 0 {
+		result = strings.TrimRight(result, " ") + strings.Repeat(" ", padding)
 	}
 
-	// Use max of "Uptime" length (6) or longest possible uptime string
-	minWidth := 6
-	padding := strings.Repeat(" ", minWidth-visibleLen)
-	return result + padding
+	return result
+}
+
+func getTotalHTTPConnections(stats NodesStats) int64 {
+	var total int64
+	for _, node := range stats.Nodes {
+		total += node.HTTP.CurrentOpen
+	}
+	return total
+}
+
+func updateRolesPanel(rolesPanel *tview.TextView, nodesInfo NodesInfo) {
+	rolesPanel.Clear()
+	fmt.Fprintf(rolesPanel, "[::b][#00ffff][[#ff5555]3[#00ffff]] Legend[::-]\n\n")
+
+	// Add Node Roles title in cyan
+	fmt.Fprintf(rolesPanel, "[::b][#00ffff]Node Roles[::-]\n")
+
+	// Define role letters (same as in formatNodeRoles)
+	roleMap := map[string]string{
+		"master":                "M",
+		"data":                  "D",
+		"data_content":          "C",
+		"data_hot":              "H",
+		"data_warm":             "W",
+		"data_cold":             "K",
+		"data_frozen":           "F",
+		"ingest":                "I",
+		"ml":                    "L",
+		"remote_cluster_client": "R",
+		"transform":             "T",
+		"voting_only":           "V",
+		"coordinating_only":     "O",
+	}
+
+	// Create a map of active roles in the cluster
+	activeRoles := make(map[string]bool)
+	for _, node := range nodesInfo.Nodes {
+		for _, role := range node.Roles {
+			activeRoles[role] = true
+		}
+	}
+
+	// Sort roles alphabetically by their letters
+	var roles []string
+	for role := range legendLabels {
+		roles = append(roles, role)
+	}
+	sort.Slice(roles, func(i, j int) bool {
+		return roleMap[roles[i]] < roleMap[roles[j]]
+	})
+
+	// Display each role with its color and description
+	for _, role := range roles {
+		color := roleColors[role]
+		label := legendLabels[role]
+		letter := roleMap[role]
+
+		// If role is not active in cluster, use grey color for the label
+		labelColor := "[white]"
+		if !activeRoles[role] {
+			labelColor = "[#444444]"
+		}
+
+		fmt.Fprintf(rolesPanel, "[%s]%s[white] %s%s\n", color, letter, labelColor, label)
+	}
+
+	// Add version status information
+	fmt.Fprintf(rolesPanel, "\n[::b][#00ffff]Version Status[::-]\n")
+	fmt.Fprintf(rolesPanel, "[green]⚫[white] Up to date\n")
+	fmt.Fprintf(rolesPanel, "[yellow]⚫[white] Outdated\n")
+
+	// Add index health status information
+	fmt.Fprintf(rolesPanel, "\n[::b][#00ffff]Index Health[::-]\n")
+	fmt.Fprintf(rolesPanel, "[green]⚫[white] All shards allocated\n")
+	fmt.Fprintf(rolesPanel, "[#ffff00]⚫[white] Replica shards unallocated\n")
+	fmt.Fprintf(rolesPanel, "[#ff5555]⚫[white] Primary shards unallocated\n")
+
+	// Add index status indicators
+	fmt.Fprintf(rolesPanel, "\n[::b][#00ffff]Index Status[::-]\n")
+	fmt.Fprintf(rolesPanel, "[#5555ff]⚫[white] Active indexing\n")
+	fmt.Fprintf(rolesPanel, "[#444444]⚪[white] No indexing\n")
+	fmt.Fprintf(rolesPanel, "[#bd93f9]⚫[white] Data stream\n")
+}
+
+func formatResourceSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%4d B", bytes)
+	}
+
+	units := []string{"B", "K", "M", "G", "T", "P"}
+	exp := 0
+	val := float64(bytes)
+
+	for val >= unit && exp < len(units)-1 {
+		val /= unit
+		exp++
+	}
+
+	return fmt.Sprintf("%3d%s", int(val), units[exp])
 }
