@@ -32,12 +32,29 @@ type ClusterStats struct {
 			SizeInBytes      int64 `json:"size_in_bytes"`
 			TotalSizeInBytes int64 `json:"total_size_in_bytes"`
 		} `json:"store"`
+		Mappings struct {
+			TotalDeduplicatedFieldCount         int   `json:"total_deduplicated_field_count"`
+			TotalDeduplicatedMappingSizeInBytes int64 `json:"total_deduplicated_mapping_size_in_bytes"`
+		} `json:"mappings"`
 	} `json:"indices"`
 	Nodes struct {
 		Total      int `json:"total"`
 		Successful int `json:"successful"`
 		Failed     int `json:"failed"`
 	} `json:"_nodes"`
+	Process struct {
+		CPU struct {
+			Percent int `json:"percent"`
+		} `json:"cpu"`
+		OpenFileDescriptors struct {
+			Min int `json:"min"`
+			Max int `json:"max"`
+			Avg int `json:"avg"`
+		} `json:"open_file_descriptors"`
+	} `json:"process"`
+	Snapshots struct {
+		Count int `json:"count"`
+	} `json:"snapshots"`
 }
 
 type NodesInfo struct {
@@ -153,6 +170,7 @@ type NodesStats struct {
 					} `json:"old"`
 				} `json:"collectors"`
 			} `json:"gc"`
+			UptimeInMillis int64 `json:"uptime_in_millis"`
 		} `json:"jvm"`
 		Transport struct {
 			RxSizeInBytes int64 `json:"rx_size_in_bytes"`
@@ -389,6 +407,7 @@ var legendLabels = map[string]string{
 }
 
 func formatNodeRoles(roles []string) string {
+	// Define all possible roles and their letters in the desired order
 	roleMap := map[string]string{
 		"master":                "M",
 		"data":                  "D",
@@ -405,35 +424,29 @@ func formatNodeRoles(roles []string) string {
 		"coordinating_only":     "O",
 	}
 
-	// Get the role letters and sort them
-	var letters []string
+	// Create a map of the node's roles for quick lookup
+	nodeRoles := make(map[string]bool)
 	for _, role := range roles {
-		if letter, exists := roleMap[role]; exists {
-			letters = append(letters, letter)
-		}
-	}
-	sort.Strings(letters)
-
-	formattedRoles := "             "
-	runeRoles := []rune(formattedRoles)
-
-	for i, letter := range letters {
-		if i < 13 {
-			runeRoles[i] = []rune(letter)[0]
-		}
+		nodeRoles[role] = true
 	}
 
-	var result string
-	for _, r := range runeRoles {
-		if r == ' ' {
-			result += " "
+	// Create ordered list of role keys for consistent display
+	orderedRoles := []string{
+		"master", "data", "data_content", "data_hot",
+		"data_warm", "data_cold", "data_frozen", "ingest",
+		"ml", "remote_cluster_client", "transform",
+		"voting_only", "coordinating_only",
+	}
+
+	result := ""
+	for _, role := range orderedRoles {
+		letter := roleMap[role]
+		if nodeRoles[role] {
+			// Node has this role - use the role's color
+			result += fmt.Sprintf("[%s]%s[white]", roleColors[role], letter)
 		} else {
-			for role, shortRole := range roleMap {
-				if string(r) == shortRole {
-					result += fmt.Sprintf("[%s]%s[white]", roleColors[role], string(r))
-					break
-				}
-			}
+			// Node doesn't have this role - use dark grey
+			result += fmt.Sprintf("[#444444]%s[white]", letter)
 		}
 	}
 
@@ -463,9 +476,6 @@ type indexInfo struct {
 	writeOps     int64
 	indexingRate float64
 }
-
-// Add startTime at package level
-var startTime = time.Now()
 
 func updateGridLayout(grid *tview.Grid, showRoles, showIndices, showMetrics bool) {
 	// Start with clean grid
@@ -812,25 +822,7 @@ func main() {
 				nodeLoads[node.Name] = node.Load1m
 			}
 
-			// In the update() function, add this request before processing nodes:
-			var threadPoolStats []ThreadPoolStats
-			if err := makeRequest("/_cat/thread_pool/generic?format=json&h=node_name,name,active,queue,rejected,completed", &threadPoolStats); err != nil {
-				nodesPanel.SetText(fmt.Sprintf("[red]Error getting thread pool stats: %v", err))
-				return
-			}
-
-			// Create a map for quick lookup of thread pool stats by node name
-			threadPoolMap := make(map[string]ThreadPoolStats)
-			for _, stat := range threadPoolStats {
-				threadPoolMap[stat.NodeName] = stat
-			}
-
-			active, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Active)
-			queue, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Queue)
-			rejected, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Rejected)
-			completed, _ := strconv.Atoi(threadPoolMap[nodeInfo.Name].Completed)
-
-			fmt.Fprintf(nodesPanel, "[#5555ff]%-*s  [white] [#444444]│[white] %s [#444444]│[white] [white]%-*s[white] [#444444]│[white] [%s]%-7s[white] [#444444]│[white] [%s]%3d%% [#444444](%d)[white] [#444444]│[white] %4s [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %6s [#444444]│[white] %5s [#444444]│[white] %8s [#444444]│[white] %9s [#444444]│[white] %s [#bd93f9]%s[white] [#444444](%s)[white]\n",
+			fmt.Fprintf(nodesPanel, "[#5555ff]%-*s [white] [#444444]│[white] %s [#444444]│[white] [white]%*s[white] [#444444]│[white] [%s]%-7s[white] [#444444]│[white] [%s]%3d%% [#444444](%d)[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %4s / %4s [%s]%3d%%[white] [#444444]│[white] %-8s[white] [#444444]│[white] %s [#bd93f9]%s[white] [#444444](%s)[white]\n",
 				maxNodeNameLen,
 				nodeInfo.Name,
 				formatNodeRoles(nodeInfo.Roles),
@@ -841,7 +833,6 @@ func main() {
 				getPercentageColor(float64(cpuPercent)),
 				cpuPercent,
 				nodeInfo.OS.AvailableProcessors,
-				nodeLoads[nodeInfo.Name],
 				formatResourceSize(nodeStats.OS.Memory.UsedInBytes),
 				formatResourceSize(nodeStats.OS.Memory.TotalInBytes),
 				getPercentageColor(memPercent),
@@ -854,10 +845,7 @@ func main() {
 				formatResourceSize(diskTotal),
 				getPercentageColor(diskPercent),
 				int(diskPercent),
-				formatNumber(active),
-				formatNumber(queue),
-				formatNumber(rejected),
-				formatNumber(completed),
+				formatUptime(nodeStats.JVM.UptimeInMillis),
 				nodeInfo.OS.PrettyName,
 				nodeInfo.OS.Version,
 				nodeInfo.OS.Arch)
@@ -952,7 +940,7 @@ func main() {
 			// Add data stream indicator
 			streamIndicator := " "
 			if isDataStream(idx.index, dataStreamResp) {
-				streamIndicator = "[#bd93f9]⚡[white]"
+				streamIndicator = "[#bd93f9]⚫[white]"
 			}
 
 			// Calculate document changes
@@ -980,11 +968,11 @@ func main() {
 			// Convert the size format before display
 			sizeStr := convertSizeFormat(idx.storeSize)
 
-			fmt.Fprintf(indicesPanel, "%s %s[%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %12s [#444444]│[white] %8s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
+			fmt.Fprintf(indicesPanel, "%s %s[%s]%-*s[white] [#444444]│[white] %15s [#444444]│[white] %5s [#444444]│[white] %6s [#444444]│[white] %8s [#444444]│[white] %s [#444444]│[white] %-8s\n",
 				writeIcon,
 				streamIndicator,
 				getHealthColor(idx.health),
-				maxIndexNameLen,
+				maxIndexNameLen-1,
 				idx.index,
 				formatNumber(idx.docs),
 				sizeStr,
@@ -1033,68 +1021,82 @@ func main() {
 		metricsPanel.Clear()
 		fmt.Fprintf(metricsPanel, "[::b][#00ffff][[#ff5555]5[#00ffff]] Cluster Metrics[::-]\n\n")
 
-		// Helper function to format metric lines with consistent alignment
-		formatMetric := func(name string, value string) string {
-			return fmt.Sprintf("[#00ffff]%-25s[white] %s\n", name+":", value)
+		// Define metrics keys and find the longest one
+		metricKeys := []string{
+			"CPU",
+			"Disk",
+			"Heap",
+			"Memory",
+			"Network TX",
+			"Network RX",
+			"Snapshots",
 		}
 
-		// Search metrics
-		fmt.Fprint(metricsPanel, formatMetric("Search Queries", formatNumber(int(totalQueries))))
-		fmt.Fprint(metricsPanel, formatMetric("Query Rate", fmt.Sprintf("%s/s", formatNumber(int(float64(totalQueries)/time.Since(startTime).Seconds())))))
-		fmt.Fprint(metricsPanel, formatMetric("Total Query Time", fmt.Sprintf("%.1fs", totalQueryTime)))
-		fmt.Fprint(metricsPanel, formatMetric("Avg Query Latency", fmt.Sprintf("%.2fms", totalQueryTime*1000/float64(totalQueries+1))))
+		maxKeyLength := 0
+		for _, key := range metricKeys {
+			if len(key) > maxKeyLength {
+				maxKeyLength = len(key)
+			}
+		}
 
-		// Indexing metrics
-		fmt.Fprint(metricsPanel, formatMetric("Index Operations", formatNumber(int(totalIndexing))))
-		fmt.Fprint(metricsPanel, formatMetric("Indexing Rate", fmt.Sprintf("%s/s", formatNumber(int(float64(totalIndexing)/time.Since(startTime).Seconds())))))
-		fmt.Fprint(metricsPanel, formatMetric("Total Index Time", fmt.Sprintf("%.1fs", totalIndexingTime)))
-		fmt.Fprint(metricsPanel, formatMetric("Avg Index Latency", fmt.Sprintf("%.2fms", totalIndexingTime*1000/float64(totalIndexing+1))))
+		// Helper function for metric lines with dynamic key padding
+		formatMetric := func(name string, value string) string {
+			return fmt.Sprintf("[#00ffff]%-*s[white] %s\n", maxKeyLength, name+":", value)
+		}
 
-		// GC metrics
-		fmt.Fprint(metricsPanel, formatMetric("GC Collections", formatNumber(int(totalGCCollections))))
-		fmt.Fprint(metricsPanel, formatMetric("Total GC Time", fmt.Sprintf("%.1fs", totalGCTime)))
-		fmt.Fprint(metricsPanel, formatMetric("Avg GC Time", fmt.Sprintf("%.2fms", totalGCTime*1000/float64(totalGCCollections+1))))
+		// CPU metrics - show only CPU percent and total processors
+		totalProcessors := 0
+		for _, node := range nodesInfo.Nodes {
+			totalProcessors += node.OS.AvailableProcessors
+		}
+		cpuPercent := float64(clusterStats.Process.CPU.Percent)
+		fmt.Fprint(metricsPanel, formatMetric("CPU", fmt.Sprintf("[%s]%7.1f%%[white] [#444444](%d processors)[white]",
+			getPercentageColor(cpuPercent),
+			cpuPercent,
+			totalProcessors)))
 
-		// Memory metrics
-		totalMemoryPercent := float64(totalMemoryUsed) / float64(totalMemoryTotal) * 100
-		totalHeapPercent := float64(totalHeapUsed) / float64(totalHeapMax) * 100
-		fmt.Fprint(metricsPanel, formatMetric("Memory Usage", fmt.Sprintf("%s / %s (%.1f%%)", bytesToHuman(totalMemoryUsed), bytesToHuman(totalMemoryTotal), totalMemoryPercent)))
-		fmt.Fprint(metricsPanel, formatMetric("Heap Usage", fmt.Sprintf("%s / %s (%.1f%%)", bytesToHuman(totalHeapUsed), bytesToHuman(totalHeapMax), totalHeapPercent)))
+		// Disk metrics
+		diskUsed := getTotalSize(nodesStats)
+		diskTotal := getTotalDiskSpace(nodesStats)
+		diskPercent := float64(diskUsed) / float64(diskTotal) * 100
+		fmt.Fprint(metricsPanel, formatMetric("Disk", fmt.Sprintf("%8s / %8s [%s]%5.1f%%[white]",
+			bytesToHuman(diskUsed),
+			bytesToHuman(diskTotal),
+			getPercentageColor(diskPercent),
+			diskPercent)))
 
-		// Segment metrics
-		fmt.Fprint(metricsPanel, formatMetric("Total Segments", formatNumber(int(getTotalSegments(nodesStats)))))
-		fmt.Fprint(metricsPanel, formatMetric("Open File Descriptors", formatNumber(int(getTotalOpenFiles(nodesStats)))))
+		// Calculate heap totals
+		totalHeapUsed = 0
+		totalHeapMax = 0
+		for _, node := range nodesStats.Nodes {
+			totalHeapUsed += node.JVM.Memory.HeapUsedInBytes
+			totalHeapMax += node.JVM.Memory.HeapMaxInBytes
+		}
+		heapPercent := float64(totalHeapUsed) / float64(totalHeapMax) * 100
+		fmt.Fprint(metricsPanel, formatMetric("Heap", fmt.Sprintf("%8s / %8s [%s]%5.1f%%[white]",
+			bytesToHuman(totalHeapUsed),
+			bytesToHuman(totalHeapMax),
+			getPercentageColor(heapPercent),
+			heapPercent)))
+
+		// Calculate memory totals
+		totalMemoryUsed = 0
+		totalMemoryTotal = 0
+		for _, node := range nodesStats.Nodes {
+			totalMemoryUsed += node.OS.Memory.UsedInBytes
+			totalMemoryTotal += node.OS.Memory.TotalInBytes
+		}
+		memoryPercent := float64(totalMemoryUsed) / float64(totalMemoryTotal) * 100
+		fmt.Fprint(metricsPanel, formatMetric("Memory", fmt.Sprintf("%8s / %8s [%s]%5.1f%%[white]",
+			bytesToHuman(totalMemoryUsed),
+			bytesToHuman(totalMemoryTotal),
+			getPercentageColor(memoryPercent),
+			memoryPercent)))
 
 		// Network metrics
-		fmt.Fprint(metricsPanel, formatMetric("Network TX", bytesToHuman(getTotalNetworkTX(nodesStats))))
-		fmt.Fprint(metricsPanel, formatMetric("Network RX", bytesToHuman(getTotalNetworkRX(nodesStats))))
-
-		// Disk I/O metrics
-		totalDiskReads := int64(0)
-		totalDiskWrites := int64(0)
-		for _, node := range nodesStats.Nodes {
-			totalDiskReads += node.FS.DiskReads
-			totalDiskWrites += node.FS.DiskWrites
-		}
-		fmt.Fprint(metricsPanel, formatMetric("Disk Reads", formatNumber(int(totalDiskReads))))
-		fmt.Fprint(metricsPanel, formatMetric("Disk Writes", formatNumber(int(totalDiskWrites))))
-
-		// HTTP connections
-		totalHTTPConnections := int64(0)
-		for _, node := range nodesStats.Nodes {
-			totalHTTPConnections += node.HTTP.CurrentOpen
-		}
-		fmt.Fprint(metricsPanel, formatMetric("HTTP Connections", formatNumber(int(totalHTTPConnections))))
-
-		// Average CPU usage across nodes
-		avgCPUPercent := float64(totalCPUPercent) / float64(nodeCount)
-		fmt.Fprint(metricsPanel, formatMetric("Average CPU Usage", fmt.Sprintf("%.1f%%", avgCPUPercent)))
-
-		// Pending tasks
-		fmt.Fprint(metricsPanel, formatMetric("Pending Tasks", formatNumber(clusterHealth.NumberOfPendingTasks)))
-		if clusterHealth.TaskMaxWaitingTime != "" && clusterHealth.TaskMaxWaitingTime != "0s" {
-			fmt.Fprint(metricsPanel, formatMetric("Max Task Wait Time", clusterHealth.TaskMaxWaitingTime))
-		}
+		fmt.Fprint(metricsPanel, formatMetric("Network TX", fmt.Sprintf("%7s", bytesToHuman(getTotalNetworkTX(nodesStats)))))
+		fmt.Fprint(metricsPanel, formatMetric("Network RX", fmt.Sprintf("%7s", bytesToHuman(getTotalNetworkRX(nodesStats)))))
+		fmt.Fprint(metricsPanel, formatMetric("Snapshots", fmt.Sprintf("%7d", clusterStats.Snapshots.Count)))
 
 		// Update roles panel
 		rolesPanel.Clear()
@@ -1183,22 +1185,6 @@ func main() {
 	}
 }
 
-func getTotalSegments(stats NodesStats) int64 {
-	var total int64
-	for _, node := range stats.Nodes {
-		total += node.Indices.Segments.Count
-	}
-	return total
-}
-
-func getTotalOpenFiles(stats NodesStats) int64 {
-	var total int64
-	for _, node := range stats.Nodes {
-		total += node.Process.OpenFileDescriptors
-	}
-	return total
-}
-
 func getTotalNetworkTX(stats NodesStats) int64 {
 	var total int64
 	for _, node := range stats.Nodes {
@@ -1249,7 +1235,7 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int)
 }
 
 func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
-	return fmt.Sprintf("[::b]%-*s  [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %-*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %4s      [#444444]│[#00ffff] %4s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %6s [#444444]│[#00ffff] %5s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %9s [#444444]│[#00ffff] %-25s[white]\n",
+	return fmt.Sprintf("[::b]%-*s [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %-9s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-6s [#444444]│[#00ffff] %-25s[white]\n",
 		maxNodeNameLen,
 		"Node Name",
 		"Roles",
@@ -1257,20 +1243,16 @@ func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
 		"Transport Address",
 		"Version",
 		"CPU",
-		"Load",
 		"Memory",
 		"Heap",
 		"Disk",
-		"Active",
-		"Queue",
-		"Rejected",
-		"Completed",
+		"Uptime",
 		"OS")
 }
 
 func getIndicesPanelHeader(maxIndexNameLen int) string {
-	return fmt.Sprintf("   [::b] %-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %12s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
-		maxIndexNameLen,
+	return fmt.Sprintf("   [::b] %-*s [#444444]│[#00ffff] %15s [#444444]│[#00ffff] %5s [#444444]│[#00ffff] %6s [#444444]│[#00ffff] %8s [#444444]│[#00ffff] %-12s [#444444]│[#00ffff] %-8s[white]\n",
+		maxIndexNameLen-1,
 		"Index Name",
 		"Documents",
 		"Size",
@@ -1289,12 +1271,53 @@ func isDataStream(name string, dataStreams DataStreamResponse) bool {
 	return false
 }
 
-// Add this with the other type definitions near the top of the file
-type ThreadPoolStats struct {
-	NodeName  string `json:"node_name"`
-	Name      string `json:"name"`
-	Active    string `json:"active"`
-	Queue     string `json:"queue"`
-	Rejected  string `json:"rejected"`
-	Completed string `json:"completed"`
+func getTotalSize(stats NodesStats) int64 {
+	var total int64
+	for _, node := range stats.Nodes {
+		if len(node.FS.Data) > 0 {
+			total += node.FS.Data[0].TotalInBytes - node.FS.Data[0].AvailableInBytes
+		}
+	}
+	return total
+}
+
+func getTotalDiskSpace(stats NodesStats) int64 {
+	var total int64
+	for _, node := range stats.Nodes {
+		if len(node.FS.Data) > 0 {
+			total += node.FS.Data[0].TotalInBytes
+		}
+	}
+	return total
+}
+
+func formatUptime(uptimeMillis int64) string {
+	uptime := time.Duration(uptimeMillis) * time.Millisecond
+	days := int(uptime.Hours() / 24)
+	hours := int(uptime.Hours()) % 24
+	minutes := int(uptime.Minutes()) % 60
+
+	var result string
+	if days > 0 {
+		result = fmt.Sprintf("%d[#ff66cc]d[white]%d[#ff66cc]h[white]", days, hours)
+	} else if hours > 0 {
+		result = fmt.Sprintf("%d[#ff66cc]h[white]%d[#ff66cc]m[white]", hours, minutes)
+	} else {
+		result = fmt.Sprintf("%d[#ff66cc]m[white]", minutes)
+	}
+
+	// Calculate the actual visible length (excluding color codes)
+	visibleLen := 0
+	if days > 0 {
+		visibleLen = len(fmt.Sprintf("%dd%dh", days, hours))
+	} else if hours > 0 {
+		visibleLen = len(fmt.Sprintf("%dh%dm", hours, minutes))
+	} else {
+		visibleLen = len(fmt.Sprintf("%dm", minutes))
+	}
+
+	// Use max of "Uptime" length (6) or longest possible uptime string
+	minWidth := 6
+	padding := strings.Repeat(" ", minWidth-visibleLen)
+	return result + padding
 }
