@@ -1213,7 +1213,7 @@ func getMaxLengths(nodesInfo NodesInfo, indicesStats IndexStats) (int, int, int,
 }
 
 func getNodesPanelHeader(maxNodeNameLen, maxTransportLen int) string {
-	return fmt.Sprintf("[::b]%-*s [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %-9s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-6s [#444444][#00ffff] %-25s[white]\n",
+	return fmt.Sprintf("[::b]%-*s [#444444]│[#00ffff] %-13s [#444444]│[#00ffff] %*s [#444444]│[#00ffff] %-7s [#444444]│[#00ffff] %-9s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-16s [#444444]│[#00ffff] %-6s [#444444]│[#00ffff] %-25s[white]\n",
 		maxNodeNameLen,
 		"Node Name",
 		"Roles",
