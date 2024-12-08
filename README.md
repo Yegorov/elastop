@@ -32,12 +32,13 @@ go build
 ```
 
 ### Command Line Flags
-| Flag        | Description            | Default       |
-| ----------- | ---------------------- | ------------- |
-| `-host`     | Elasticsearch host     | `localhost`   |
-| `-port`     | Elasticsearch port     | `9200`        |
-| `-user`     | Elasticsearch username | `elastic`     |
-| `-password` | Elasticsearch password | `ES_PASSWORD` |
+| Flag        | Description                         | Default       |
+| ----------- | ----------------------------------- | ------------- |
+| `-host`     | Elasticsearch host                  | `localhost`   |
+| `-port`     | Elasticsearch port                  | `9200`        |
+| `-user`     | Elasticsearch username              | `elastic`     |
+| `-password` | Elasticsearch password              | `ES_PASSWORD` |
+| `-authless` | Connect without user/pass or apikey | `false`       |
 
 ## Dashboard Layout
 

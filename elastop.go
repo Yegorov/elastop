@@ -537,6 +537,7 @@ func main() {
 	user := flag.String("user", os.Getenv("ES_USER"), "Elasticsearch username")
 	password := flag.String("password", os.Getenv("ES_PASSWORD"), "Elasticsearch password")
 	flag.StringVar(&apiKey, "apikey", os.Getenv("ES_API_KEY"), "Elasticsearch API key")
+	authless := flag.Bool("authless", false, "Connect without user/pass or apikey")
 	flag.Parse()
 
 	// Validate and process the host URL
@@ -545,15 +546,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate authentication
-	if apiKey != "" && (*user != "" || *password != "") {
-		fmt.Fprintf(os.Stderr, "Error: Cannot use both API key and username/password authentication\n")
-		os.Exit(1)
-	}
+	if !*authless {
+		// Validate authentication
+		if apiKey != "" && (*user != "" || *password != "") {
+			fmt.Fprintf(os.Stderr, "Error: Cannot use both API key and username/password authentication\n")
+			os.Exit(1)
+		}
 
-	if apiKey == "" && (*user == "" || *password == "") {
-		fmt.Fprintf(os.Stderr, "Error: Must provide either API key or both username and password\n")
-		os.Exit(1)
+		if apiKey == "" && (*user == "" || *password == "") {
+			fmt.Fprintf(os.Stderr, "Error: Must provide either API key or both username and password\n")
+			os.Exit(1)
+		}
 	}
 
 	// Strip any trailing slash from the host
@@ -616,11 +619,13 @@ func main() {
 				return err
 			}
 
-			// Set authentication
-			if apiKey != "" {
-				req.Header.Set("Authorization", fmt.Sprintf("ApiKey %s", apiKey))
-			} else {
-				req.SetBasicAuth(*user, *password)
+			if !*authless {
+				// Set authentication
+				if apiKey != "" {
+					req.Header.Set("Authorization", fmt.Sprintf("ApiKey %s", apiKey))
+				} else {
+					req.SetBasicAuth(*user, *password)
+				}
 			}
 
 			resp, err := client.Do(req)
